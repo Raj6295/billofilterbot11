@@ -229,6 +229,20 @@ class SpellChecker:
 # Initialize spell checker
 spell_checker = SpellChecker()
 
+def reset_stale_session(session_name: str = "MovieFilterBot"):
+    """Clear stale Pyrogram session files that can block bot startup after clock/session desync."""
+    for suffix in (".session", ".session-journal"):
+        session_path = f"{session_name}{suffix}"
+        if os.path.exists(session_path):
+            try:
+                os.remove(session_path)
+                logger.warning(f"Removed stale session file: {session_path}")
+            except Exception as e:
+                logger.warning(f"Could not remove stale session file {session_path}: {e}")
+
+
+reset_stale_session()
+
 # Initialize the Pyrogram client
 app = Client(
     "MovieFilterBot",
