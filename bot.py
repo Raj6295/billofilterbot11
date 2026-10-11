@@ -2,7 +2,9 @@ import os
 import logging
 import asyncio
 import re
+import threading
 import aiohttp
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import List, Dict, Optional, Union, Tuple, Any
 from datetime import datetime
 
@@ -912,13 +914,43 @@ def _format_size(size_bytes: int) -> str:
         i += 1    
     return f"{size_bytes:.2f} {units[i]}"
 
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        logger.debug("Health check request: %s", format % args)
+
+
+def start_health_server():
+    """Expose a simple health endpoint so Render sees an open port on web deployments."""
+    port = int(os.getenv("PORT", "8080"))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    logger.info(f"Health server started on port {port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
 # Start the bot
 if __name__ == "__main__":
     logger.info("Starting Movie Filter Bot...")
-    
+
     # Create necessary directories
     os.makedirs("logs", exist_ok=True)
-    
+
+    # Render Web Services require an open port. This simple HTTP server keeps the port open
+    # while the Telegram bot continues running in the same process.
+    if os.getenv("RENDER") or os.getenv("PORT"):
+        health_thread = threading.Thread(target=start_health_server, daemon=True)
+        health_thread.start()
+
     try:
         # Run the bot
         app.run()
@@ -926,6 +958,13 @@ if __name__ == "__main__":
         logger.error(f"Bot stopped with error: {e}")
     finally:
         # Clean up resources
-        asyncio.get_event_loop().run_until_complete(spell_checker.close())
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(spell_checker.close())
+            else:
+                loop.run_until_complete(spell_checker.close())
+        except RuntimeError:
+            pass
         db.close()
         logger.info("Bot stopped.")
