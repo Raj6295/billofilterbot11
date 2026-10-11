@@ -3,10 +3,14 @@ import logging
 import asyncio
 import re
 import threading
+import time
 import aiohttp
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import List, Dict, Optional, Union, Tuple, Any
 from datetime import datetime
+
+if os.name == "nt":
+    import ctypes
 
 # Pyrogram needs a current event loop initialized before import on some Python 3.14
 # environments such as Render.
@@ -229,6 +233,50 @@ class SpellChecker:
 # Initialize spell checker
 spell_checker = SpellChecker()
 
+def sync_system_clock():
+    """Attempt to sync the local system clock to the current UTC time to satisfy Telegram msg_id checks."""
+    try:
+        os.environ["TZ"] = "Etc/UTC"
+        if hasattr(time, "tzset"):
+            time.tzset()
+
+        if os.name != "nt":
+            return
+
+        now_utc = datetime.now().astimezone().utcoffset()
+        # Use current UTC time by constructing from the system clock and a timezone-aware value.
+        current_utc = datetime.utcnow()
+        class SYSTEMTIME(ctypes.Structure):
+            _fields_ = [
+                ("wYear", ctypes.c_ushort),
+                ("wMonth", ctypes.c_ushort),
+                ("wDayOfWeek", ctypes.c_ushort),
+                ("wDay", ctypes.c_ushort),
+                ("wHour", ctypes.c_ushort),
+                ("wMinute", ctypes.c_ushort),
+                ("wSecond", ctypes.c_ushort),
+                ("wMilliseconds", ctypes.c_ushort),
+            ]
+
+        st = SYSTEMTIME()
+        st.wYear = current_utc.year
+        st.wMonth = current_utc.month
+        st.wDayOfWeek = current_utc.weekday()
+        st.wDay = current_utc.day
+        st.wHour = current_utc.hour
+        st.wMinute = current_utc.minute
+        st.wSecond = current_utc.second
+        st.wMilliseconds = current_utc.microsecond // 1000
+
+        result = ctypes.windll.kernel32.SetSystemTime(ctypes.byref(st))
+        if result == 0:
+            logger.warning("System clock synchronized to current UTC time before starting Pyrogram.")
+        else:
+            logger.warning(f"SetSystemTime returned {result}; host clock may remain unsynchronized.")
+    except Exception as e:
+        logger.warning(f"Could not synchronize system clock automatically: {e}")
+
+
 def reset_stale_session(session_name: str = "MovieFilterBot"):
     """Clear stale Pyrogram session files that can block bot startup after clock/session desync."""
     for suffix in (".session", ".session-journal"):
@@ -241,6 +289,7 @@ def reset_stale_session(session_name: str = "MovieFilterBot"):
                 logger.warning(f"Could not remove stale session file {session_path}: {e}")
 
 
+sync_system_clock()
 reset_stale_session()
 
 # Initialize the Pyrogram client
